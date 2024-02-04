@@ -2,69 +2,64 @@ use anyhow::{Context, Result};
 use bevy::prelude::*;
 
 use crate::{
+    game_scene::{GameScene, GameSceneData},
     handle_errors,
-    level::{GameLevel, LevelAnimations, LevelLoad, LevelTag},
+    level::{GameLevel, LoadLevel},
     player::{Direction, Player, PlayerCollision},
     GameState,
 };
 
 #[derive(Resource)]
-pub struct Level1Data {
+pub struct Level1 {
+    scene_data: GameSceneData,
     lever1_clicked: bool,
     pusher1_active: bool,
 }
 
-impl Level1Data {
-    pub fn new() -> Self {
+impl GameScene for Level1 {
+    fn from_scene_data(data: GameSceneData) -> Self {
         Self {
+            scene_data: data,
             lever1_clicked: false,
             pusher1_active: true,
         }
     }
 }
 
-pub struct Level1;
-
 impl GameLevel for Level1 {
-    fn on_enter(&self, state: GameState, app: &mut App) {
-        app.add_systems(OnEnter(state), setup);
-    }
-
-    fn on_exit(&self, state: GameState, app: &mut App) {
-        app.add_systems(OnExit(state), cleanup);
-    }
-
-    fn update(&self, state: GameState, app: &mut App) {
+    fn build(state: GameState, app: &mut App) {
+        app.add_systems(OnEnter(state.clone()), setup);
+        app.add_systems(OnExit(state.clone()), cleanup);
         app.add_systems(
             Update,
             (
-                process_sensors.pipe(handle_errors),
+                process_sensors
+                    .pipe(handle_errors)
+                    .run_if(resource_exists::<Level1>())
+                    .run_if(resource_exists::<Player>()),
                 process_animations
                     .pipe(handle_errors)
-                    .run_if(resource_exists::<LevelAnimations>()),
+                    .run_if(resource_exists::<Level1>()),
             )
-                .run_if(in_state(state)),
+                .run_if(in_state(state.clone())),
         );
     }
 }
 
 fn setup(mut commands: Commands) {
-    commands.insert_resource(LevelLoad::new("lvl1.glb", 0));
-    commands.insert_resource(Level1Data::new());
+    commands.insert_resource(LoadLevel::new::<Level1>("lvl1.glb", 0));
 }
 
 fn cleanup(mut commands: Commands) {
-    commands.remove_resource::<Level1Data>();
+    commands.remove_resource::<Level1>();
 }
 
 fn process_sensors(
     names: Query<&Name>,
     collisions: Query<&PlayerCollision>,
-    mut level: ResMut<Level1Data>,
-    mut player: Query<&mut Player>,
+    mut level: ResMut<Level1>,
+    mut player: ResMut<Player>,
 ) -> Result<()> {
-    let mut player = player.get_single_mut()?;
-
     player.push_vec = Vec2::ZERO;
 
     for collision in collisions.iter() {
@@ -87,13 +82,12 @@ fn process_sensors(
 }
 
 fn process_animations(
-    mut level: ResMut<Level1Data>,
-    mut anim_player: Query<(&Name, &mut AnimationPlayer), With<LevelTag>>,
-    anims: Res<LevelAnimations>,
+    mut level: ResMut<Level1>,
+    mut anim_player: Query<(&Name, &mut AnimationPlayer)>,
 ) -> Result<()> {
-    let clip = |name| {
-        anims
-            .named
+    let clip = |scene_data: &GameSceneData, name| {
+        scene_data
+            .animations
             .get(name)
             .map(|c| c.clone_weak())
             .context(format!("No animation with name '{name}'"))
@@ -101,9 +95,9 @@ fn process_animations(
 
     for (name, mut player) in anim_player.iter_mut() {
         match name.as_str() {
-            "fan1" | "fan2" => {
+            "fan1" => {
                 if level.pusher1_active {
-                    let clip = clip("floor_fan")?;
+                    let clip = clip(&level.scene_data, "floor_fan")?;
                     if !player.is_playing_clip(&clip) {
                         println!("SPINNING {clip:?}");
                         player.play(clip).repeat().set_speed(2.0);
@@ -115,10 +109,16 @@ fn process_animations(
             "lever1" => {
                 if !level.pusher1_active && !level.lever1_clicked {
                     level.lever1_clicked = true;
-                    let clip = clip("lever_pull")?;
+                    let clip = clip(&level.scene_data, "lever_pull")?;
                     if !player.is_playing_clip(&clip) {
                         player.play(clip);
                     }
+                }
+            }
+            "submarine_lights" => {
+                let clip = clip(&level.scene_data, "submarine_lights")?;
+                if !player.is_playing_clip(&clip) {
+                    player.play(clip).repeat();
                 }
             }
             _ => {}

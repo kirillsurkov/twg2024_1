@@ -1,88 +1,64 @@
-use std::{collections::HashMap, sync::Arc};
-
-use anyhow::Result;
 use bevy::{
     core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping},
-    gltf::{Gltf, GltfExtras},
-    pbr::{ShadowFilteringMethod, TransmittedShadowReceiver},
+    pbr::ShadowFilteringMethod,
     prelude::*,
-    render::primitives::Aabb,
 };
-use bevy_rapier2d::prelude::*;
-use serde::Deserialize;
 
-use crate::{handle_errors, player::Player, GameState};
+use crate::{
+    game_scene::{GameScene, LoadGameScene},
+    player::LoadPlayer,
+    GameState,
+};
 
 pub trait GameLevel {
-    fn on_enter(&self, state: GameState, app: &mut App);
-    fn on_exit(&self, state: GameState, app: &mut App);
-    fn update(&self, state: GameState, app: &mut App);
+    fn build(state: GameState, app: &mut App);
 }
 
 #[derive(Resource)]
-pub struct LevelAnimations {
-    pub named: HashMap<String, Handle<AnimationClip>>,
+pub struct LoadLevel {
+    load: Option<Box<dyn FnOnce(&mut Commands) + Send + Sync>>,
 }
 
-#[derive(Resource)]
-pub struct LevelLoad {
-    gltf: Option<Handle<Gltf>>,
-    root: Option<Entity>,
-    name: String,
-    scene: u32,
-}
-
-impl LevelLoad {
-    pub fn new(name: &str, scene: u32) -> Self {
+impl LoadLevel {
+    pub fn new<T: Resource + GameScene>(name: &str, scene: u32) -> Self {
         Self {
-            gltf: None,
-            root: None,
-            name: name.to_string(),
-            scene,
+            load: Some(Box::new({
+                let name = name.to_string();
+                move |commands| {
+                    commands.spawn(LoadGameScene::new::<T>(&name, scene));
+                }
+            })),
         }
     }
 }
 
-#[derive(Resource)]
-pub struct LevelInit;
-
-#[derive(Component)]
-pub struct LevelTag;
-
 #[derive(Default)]
 pub struct LevelPlugin {
-    levels: HashMap<GameState, Arc<Box<dyn GameLevel + Send + Sync>>>,
+    levels: Vec<Box<dyn Fn(&mut App) + Send + Sync>>,
 }
 
 impl LevelPlugin {
-    pub fn with_level<T: GameLevel + Send + Sync + 'static>(
-        mut self,
-        state: GameState,
-        level: T,
-    ) -> Self {
-        self.levels.insert(state, Arc::new(Box::new(level)));
+    pub fn with_level<T: GameLevel>(mut self, state: GameState) -> Self {
+        self.levels.push(Box::new({
+            let state = state.clone();
+            move |app| T::build(state.clone(), app)
+        }));
         self
     }
 }
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, level_load.run_if(resource_exists::<LevelLoad>()));
-        app.add_systems(Update, level_init.run_if(resource_exists::<LevelInit>()));
-        for (state, level) in &self.levels {
-            level.on_enter(state.clone(), app);
-            level.on_exit(state.clone(), app);
-            level.update(state.clone(), app);
-
-            app.add_systems(OnEnter(state.clone()), on_enter.pipe(handle_errors))
-                .add_systems(OnExit(state.clone()), on_exit.pipe(handle_errors));
+        app.add_systems(Update, load.run_if(resource_exists::<LoadLevel>()));
+        for level in &self.levels {
+            level(app);
         }
     }
 }
 
-fn on_enter(mut commands: Commands, asset_server: Res<AssetServer>) -> Result<()> {
-    Player::spawn(&mut commands, &asset_server);
-
+fn load(mut commands: Commands, mut level: ResMut<LoadLevel>) {
+    level.load.take().unwrap()(&mut commands);
+    commands.insert_resource(LoadPlayer);
     commands.spawn((
         Camera3dBundle {
             camera: Camera {
@@ -109,193 +85,5 @@ fn on_enter(mut commands: Commands, asset_server: Res<AssetServer>) -> Result<()
         },
     ));
 
-    Ok(())
-}
-
-fn on_exit(mut commands: Commands, entities: Query<Entity, With<LevelTag>>) -> Result<()> {
-    for entity in entities.iter() {
-        commands.entity(entity).despawn_recursive();
-    }
-    commands.remove_resource::<LevelLoad>();
-    commands.remove_resource::<LevelInit>();
-    Ok(())
-}
-
-#[derive(Default, Debug, Clone, Deserialize, Component)]
-struct CustomProps {
-    #[serde(default)]
-    ignore_physics: bool,
-    #[serde(default)]
-    invisible: bool,
-    #[serde(default)]
-    sensor: bool,
-    #[serde(default)]
-    diffuse_transmission: bool,
-}
-
-fn reduce_to_root<F: FnMut(T, Entity) -> T, T>(
-    children: &Query<&Parent>,
-    from: Entity,
-    initial: T,
-    mut cb: F,
-) -> T {
-    let mut acc = initial;
-    let mut root = from;
-    loop {
-        acc = cb(acc, root);
-        let Ok(parent) = children.get(root).map(|parent| parent.get()) else {
-            break;
-        };
-        root = parent;
-    }
-    acc
-}
-
-fn level_load(
-    mut commands: Commands,
-    mut level: ResMut<LevelLoad>,
-    asset_server: Res<AssetServer>,
-    gltfs: Res<Assets<Gltf>>,
-    entities: Query<Entity>,
-    children: Query<&Parent>,
-    extras: Query<&GltfExtras>,
-) {
-    let gltf = match level.gltf {
-        Some(ref gltf) => gltf.clone_weak(),
-        None => {
-            let handle = asset_server.load(&level.name);
-            let handle_weak = handle.clone();
-            level.gltf = Some(handle);
-            handle_weak
-        }
-    };
-
-    let Some(gltf) = gltfs.get(gltf) else {
-        return;
-    };
-
-    let Some(scene) = gltf.scenes.get(level.scene as usize) else {
-        return;
-    };
-
-    let Some(root) = level.root else {
-        level.root = Some(
-            commands
-                .spawn((
-                    LevelTag,
-                    CustomProps::default(),
-                    SceneBundle {
-                        scene: scene.clone_weak(),
-                        ..Default::default()
-                    },
-                ))
-                .id(),
-        );
-        return;
-    };
-
-    commands.insert_resource(LevelAnimations {
-        named: gltf.named_animations.clone().into_iter().collect(),
-    });
-
-    for e in entities.iter() {
-        if !reduce_to_root(&children, e, false, |f, r| f || (root == r)) {
-            continue;
-        }
-        commands.entity(e).insert((
-            LevelTag,
-            extras
-                .get(e)
-                .ok()
-                .and_then(|extras| serde_json::from_str::<CustomProps>(&extras.value).ok())
-                .unwrap_or_default(),
-        ));
-    }
-
-    commands.remove_resource::<LevelLoad>();
-    commands.insert_resource(LevelInit);
-}
-
-fn level_init(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut lights: Query<&mut PointLight, With<LevelTag>>,
-    entities: Query<Entity, With<LevelTag>>,
-    mats: Query<&Handle<StandardMaterial>>,
-    all_props: Query<&CustomProps>,
-    children: Query<&Parent>,
-    aabbs: Query<(&Aabb, &GlobalTransform)>,
-    names: Query<&Name>,
-) {
-    for mut light in lights.iter_mut() {
-        light.intensity *= 0.002;
-        light.shadows_enabled = true;
-        light.range = 1000.0;
-        light.radius = 0.25;
-    }
-
-    for e in entities.iter() {
-        if all_props.get(e).is_err() {
-            println!("{}", entities.iter().count());
-            println!("{}", all_props.iter().count());
-        }
-        let props = all_props.get(e).unwrap().clone();
-        let props = reduce_to_root(&children, e, props, |props, r| {
-            let p = all_props.get(r).unwrap();
-            CustomProps {
-                ignore_physics: p.ignore_physics || props.ignore_physics,
-                invisible: p.invisible || props.invisible,
-                sensor: p.sensor || props.sensor,
-                diffuse_transmission: props.diffuse_transmission,
-            }
-        });
-
-        if let Ok(mat) = mats.get(e) {
-            let mat = materials.get_mut(mat).unwrap();
-            if mat.emissive.l() != 0.0 {
-                mat.fog_enabled = false;
-            }
-        }
-
-        if props.invisible || props.sensor {
-            commands.entity(e).insert(Visibility::Hidden);
-        }
-
-        if props.diffuse_transmission {
-            commands.entity(e).insert(TransmittedShadowReceiver);
-        }
-
-        if !props.ignore_physics {
-            if let Ok((aabb, transform)) = aabbs.get(e) {
-                let lp1 = aabb.center - aabb.half_extents;
-                let lp2 = aabb.center + aabb.half_extents;
-
-                let gc = transform.transform_point(aabb.center.into());
-                let gp1 = transform.transform_point(lp1.into());
-                let gp2 = transform.transform_point(lp2.into());
-
-                if gp1.min(gp2).z <= 0.0 && gp1.max(gp2).z >= 0.0 {
-                    let (scale, rotation, _) = transform.to_scale_rotation_translation();
-                    let mut new_entity = commands.spawn((
-                        LevelTag,
-                        RigidBody::Fixed,
-                        TransformBundle::from(
-                            Transform::from_translation(Vec3::from((gc.xy(), 0.0)))
-                                .with_rotation(rotation)
-                                .with_scale(scale),
-                        ),
-                        Collider::cuboid(aabb.half_extents.x, aabb.half_extents.y),
-                    ));
-                    if props.sensor {
-                        new_entity.insert((Sensor, ActiveEvents::COLLISION_EVENTS));
-                    }
-                    if let Ok(name) = names.get(e) {
-                        new_entity.insert(name.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    commands.remove_resource::<LevelInit>();
+    commands.remove_resource::<LoadLevel>();
 }

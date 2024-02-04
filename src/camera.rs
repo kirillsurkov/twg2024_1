@@ -1,19 +1,27 @@
 use anyhow::Result;
 use bevy::prelude::*;
 
-use crate::{handle_errors, player::Player};
+use crate::{
+    handle_errors,
+    player::{Player, PlayerPhysics},
+};
 
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, update.pipe(handle_errors));
+        app.add_systems(
+            Update,
+            update
+                .pipe(handle_errors)
+                .run_if(resource_exists::<Player>()),
+        );
     }
 }
 
 fn update(
     time: Res<Time>,
-    player: Query<&Transform, (With<Player>, Without<Camera3d>)>,
+    player: Query<&Transform, (With<PlayerPhysics>, Without<Camera3d>)>,
     mut camera: Query<&mut Transform, With<Camera3d>>,
 ) -> Result<()> {
     let mut camera = camera.get_single_mut()?;

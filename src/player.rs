@@ -7,7 +7,13 @@ use anyhow::Result;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 
-use crate::handle_errors;
+use crate::{
+    game_scene::{GameScene, GameSceneData, LoadGameScene},
+    handle_errors,
+};
+
+#[derive(Resource)]
+pub struct LoadPlayer;
 
 #[derive(Default, Clone, PartialEq, Debug)]
 pub enum Direction {
@@ -16,15 +22,15 @@ pub enum Direction {
     Left,
 }
 
-#[derive(Component, Default)]
+#[derive(Resource)]
 pub struct Player {
+    scene_data: GameSceneData,
     pub is_action: bool,
     is_up: bool,
     is_down: bool,
     is_left: bool,
     is_right: bool,
     pub direction: Direction,
-    animations: Vec<Handle<AnimationClip>>,
     pub move_vec: Vec2,
     pub push_vec: Vec2,
     swim_timer: f32,
@@ -32,44 +38,34 @@ pub struct Player {
     turnaround_timer: f32,
 }
 
-#[derive(Component)]
-pub struct PlayerCollision {
-    pub other: Entity,
+impl GameScene for Player {
+    fn from_scene_data(data: GameSceneData) -> Self {
+        Self {
+            scene_data: data,
+            is_action: false,
+            is_up: false,
+            is_down: false,
+            is_left: false,
+            is_right: false,
+            direction: Direction::default(),
+            move_vec: Vec2::ZERO,
+            push_vec: Vec2::ZERO,
+            swim_timer: 0.0,
+            push_timer: 0.0,
+            turnaround_timer: 0.0,
+        }
+    }
 }
 
 #[derive(Component)]
-struct PlayerModel;
+pub struct PlayerPhysics;
 
-impl Player {
-    pub fn spawn(commands: &mut Commands, asset_server: &AssetServer) {
-        let scene = asset_server.load("diver.glb#Scene0");
-        commands
-            .spawn((
-                Self {
-                    animations: vec![
-                        asset_server.load("diver.glb#Animation0"),
-                        asset_server.load("diver.glb#Animation1"),
-                    ],
-                    ..Default::default()
-                },
-                Name::new("player"),
-                RigidBody::Dynamic,
-                TransformBundle::from_transform(Transform::from_xyz(0.0, 1.0, 0.0)),
-                ExternalImpulse::default(),
-                Velocity::default(),
-                Collider::capsule_y(0.5, 0.5),
-            ))
-            .with_children(|parent| {
-                parent.spawn((
-                    PlayerModel,
-                    SceneBundle {
-                        scene,
-                        transform: Transform::default(),
-                        ..Default::default()
-                    },
-                ));
-            });
-    }
+#[derive(Component)]
+pub struct PlayerModel;
+
+#[derive(Component)]
+pub struct PlayerCollision {
+    pub other: Entity,
 }
 
 pub struct PlayerPlugin;
@@ -79,21 +75,37 @@ impl Plugin for PlayerPlugin {
         app.add_systems(
             Update,
             (
-                process_keyboard.pipe(handle_errors),
-                process_movement.pipe(handle_errors),
-                process_animations.pipe(handle_errors),
-                process_collisions.pipe(handle_errors),
+                player_load.run_if(resource_exists::<LoadPlayer>()),
+                (
+                    process_keyboard.pipe(handle_errors),
+                    process_movement.pipe(handle_errors),
+                    process_animations,
+                    process_collisions.pipe(handle_errors),
+                )
+                    .run_if(resource_exists::<Player>()),
             ),
         );
     }
 }
 
-fn process_keyboard(
-    keyboard_input: Res<Input<KeyCode>>,
-    mut player: Query<&mut Player>,
-) -> Result<()> {
-    let mut player = player.get_single_mut()?;
+fn player_load(mut commands: Commands) {
+    commands.remove_resource::<LoadPlayer>();
+    commands
+        .spawn((
+            PlayerPhysics,
+            Name::new("player"),
+            RigidBody::Dynamic,
+            TransformBundle::from_transform(Transform::from_xyz(0.0, 1.0, 0.0)),
+            ExternalImpulse::default(),
+            Velocity::default(),
+            Collider::capsule_y(0.5, 0.5),
+        ))
+        .with_children(|parent| {
+            parent.spawn((PlayerModel, LoadGameScene::new::<Player>("diver.glb", 0)));
+        });
+}
 
+fn process_keyboard(keyboard_input: Res<Input<KeyCode>>, mut player: ResMut<Player>) -> Result<()> {
     player.is_action = keyboard_input.pressed(KeyCode::E);
     player.is_up = keyboard_input.pressed(KeyCode::W);
     player.is_left = keyboard_input.pressed(KeyCode::A);
@@ -105,11 +117,12 @@ fn process_keyboard(
 
 fn process_movement(
     time: Res<Time>,
-    mut player: Query<
-        (&mut Player, &mut ExternalImpulse, &Velocity, &Transform),
-        Without<PlayerModel>,
+    mut player: ResMut<Player>,
+    mut player_physics: Query<
+        (&mut ExternalImpulse, &Velocity, &Transform),
+        (With<PlayerPhysics>, Without<PlayerModel>),
     >,
-    mut player_model: Query<&mut Transform, With<PlayerModel>>,
+    mut player_model: Query<&mut Transform, (With<PlayerModel>, Without<PlayerPhysics>)>,
 ) -> Result<()> {
     let lin_speed = 10.0;
     let ang_speed = 12.0;
@@ -118,7 +131,7 @@ fn process_movement(
     let push_tmax = 0.1;
     let ang_tmax = 0.2;
 
-    let (mut player, mut impulse, velocity, transform) = player.get_single_mut()?;
+    let (mut impulse, velocity, transform) = player_physics.get_single_mut()?;
 
     player.move_vec = Vec2 {
         x: (player.is_right as i32 - player.is_left as i32) as f32,
@@ -190,30 +203,29 @@ fn process_movement(
     Ok(())
 }
 
-fn process_animations(
-    player: Query<&Player>,
-    mut anim_player: Query<(&Name, &mut AnimationPlayer)>,
-) -> Result<()> {
-    let player = player.get_single()?;
+fn process_animations(player: Res<Player>, mut anim_player: Query<(&Name, &mut AnimationPlayer)>) {
+    let idle = player.scene_data.animations.get("idle").unwrap();
+    let swim = player.scene_data.animations.get("swim").unwrap();
+    let (_, mut anim_player) = anim_player
+        .iter_mut()
+        .find(|(n, _)| n.as_str() == "player")
+        .unwrap();
 
-    if let Some((_, mut anim_player)) = anim_player.iter_mut().find(|(n, _)| n.as_str() == "player")
-    {
-        let index = if player.move_vec == Vec2::ZERO { 0 } else { 1 };
-        if !anim_player.is_playing_clip(&player.animations[index]) {
-            anim_player
-                .play_with_transition(
-                    player.animations[index].clone_weak(),
-                    Duration::from_millis(250),
-                )
-                .repeat();
-        }
+    let anim = if player.move_vec == Vec2::ZERO {
+        idle
+    } else {
+        swim
+    };
+
+    if !anim_player.is_playing_clip(&anim) {
+        anim_player
+            .play_with_transition(anim.clone_weak(), Duration::from_millis(250))
+            .repeat();
     }
-
-    Ok(())
 }
 
 pub fn process_collisions(
-    player: Query<Entity, With<Player>>,
+    player: Query<Entity, With<PlayerPhysics>>,
     collisions: Query<(Entity, &PlayerCollision)>,
     mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,

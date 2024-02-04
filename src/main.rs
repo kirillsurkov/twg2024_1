@@ -4,6 +4,7 @@ use bevy_hanabi::HanabiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_rapier2d::prelude::*;
 use camera::CameraPlugin;
+use game_scene::GameScenePlugin;
 use level::LevelPlugin;
 use lvl1::Level1;
 use mips::{generate_mipmaps, MipmapGeneratorPlugin};
@@ -12,6 +13,7 @@ use player::PlayerPlugin;
 mod mips;
 
 mod camera;
+mod game_scene;
 mod level;
 mod player;
 
@@ -46,7 +48,7 @@ fn main() {
             ..Default::default()
         })
         .insert_resource(AmbientLight {
-            color: Color::BLACK,
+            color: Color::WHITE,
             brightness: 0.0,
         })
         .insert_resource(ClearColor(Color::BLACK))
@@ -55,14 +57,15 @@ fn main() {
             MipmapGeneratorPlugin,
             HanabiPlugin,
             RapierPhysicsPlugin::<NoUserData>::default(),
-            //RapierDebugRenderPlugin::default(),
-            //WorldInspectorPlugin::new(),
+            RapierDebugRenderPlugin::default(),
+            WorldInspectorPlugin::new(),
         ))
         .add_systems(Update, generate_mipmaps::<StandardMaterial>)
         .add_plugins((
+            GameScenePlugin,
             CameraPlugin,
             PlayerPlugin,
-            LevelPlugin::default().with_level(GameState::Level1, Level1),
+            LevelPlugin::default().with_level::<Level1>(GameState::Level1),
         ))
         .add_state::<GameState>()
         .run();
