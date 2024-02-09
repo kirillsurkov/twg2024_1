@@ -2,14 +2,20 @@ use std::collections::HashMap;
 
 use bevy::{
     gltf::{Gltf, GltfExtras},
-    pbr::TransmittedShadowReceiver,
+    pbr::{NotShadowCaster, NotShadowReceiver, TransmittedShadowReceiver},
     prelude::*,
-    render::primitives::Aabb,
+    render::{
+        mesh::{Indices, VertexAttributeValues},
+        primitives::Aabb,
+    },
 };
 use bevy_rapier2d::geometry::{ActiveEvents, Collider, Sensor};
 use serde::Deserialize;
 
+use crate::utils::reduce_to_root;
+
 pub struct GameSceneData {
+    pub root: Entity,
     pub animations: HashMap<String, Handle<AnimationClip>>,
 }
 
@@ -58,24 +64,12 @@ struct CustomProps {
     sensor: bool,
     #[serde(default)]
     diffuse_transmission: bool,
-}
-
-fn reduce_to_root<F: FnMut(T, Entity) -> T, T>(
-    children: &Query<&Parent>,
-    from: Entity,
-    initial: T,
-    mut cb: F,
-) -> T {
-    let mut acc = initial;
-    let mut root = from;
-    loop {
-        acc = cb(acc, root);
-        let Ok(parent) = children.get(root).map(|parent| parent.get()) else {
-            break;
-        };
-        root = parent;
-    }
-    acc
+    #[serde(default)]
+    no_shadow: bool,
+    #[serde(default)]
+    color: Vec3,
+    #[serde(default)]
+    complex_physics: bool,
 }
 
 fn load(
@@ -85,10 +79,12 @@ fn load(
     mut lights: Query<&mut PointLight>,
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<Gltf>>,
+    meshes: Res<Assets<Mesh>>,
     entities: Query<Entity>,
     children: Query<&Parent>,
     extras: Query<&GltfExtras>,
-    mats: Query<&Handle<StandardMaterial>>,
+    material: Query<&Handle<StandardMaterial>>,
+    mesh: Query<(&Handle<Mesh>, &GlobalTransform)>,
     aabbs: Query<(&Aabb, &GlobalTransform)>,
     names: Query<&Name>,
 ) {
@@ -143,14 +139,16 @@ fn load(
                 continue;
             }
 
-            let props = prop(entity).clone();
-            let props = reduce_to_root(&children, entity, props, |props, r| {
+            let props = reduce_to_root(&children, entity, prop(entity).clone(), |props, r| {
                 let p = prop(r);
                 CustomProps {
                     ignore_physics: p.ignore_physics || props.ignore_physics,
                     invisible: p.invisible || props.invisible,
                     sensor: p.sensor || props.sensor,
                     diffuse_transmission: p.diffuse_transmission || props.diffuse_transmission,
+                    no_shadow: p.no_shadow || props.no_shadow,
+                    color: props.color,
+                    complex_physics: p.complex_physics || props.complex_physics,
                 }
             });
 
@@ -160,11 +158,9 @@ fn load(
                 light.radius = 0.25;
             }
 
-            if let Ok(mat) = mats.get(entity) {
-                let mat = materials.get_mut(mat).unwrap();
-                if mat.emissive.l() != 0.0 {
-                    mat.fog_enabled = false;
-                }
+            if let Ok(material) = material.get(entity) {
+                let material = materials.get_mut(material).unwrap();
+                material.emissive *= 2.0;
             }
 
             if props.invisible || props.sensor {
@@ -175,29 +171,82 @@ fn load(
                 commands.entity(entity).insert(TransmittedShadowReceiver);
             }
 
+            if props.no_shadow {
+                commands
+                    .entity(entity)
+                    .insert((NotShadowCaster, NotShadowReceiver));
+            }
+
             if !props.ignore_physics {
-                if let Ok((aabb, transform)) = aabbs.get(entity) {
-                    let lp1 = aabb.center - aabb.half_extents;
-                    let lp2 = aabb.center + aabb.half_extents;
+                let new_entity = if props.complex_physics {
+                    println!("COMPLEX PHYSICS");
+                    if let Ok((mesh, transform)) = mesh.get(entity) {
+                        let mesh = meshes.get(mesh).unwrap();
+                        let vertices = mesh
+                            .attribute(Mesh::ATTRIBUTE_POSITION)
+                            .and_then(VertexAttributeValues::as_float3)
+                            .unwrap()
+                            .into_iter()
+                            .map(|[x, y, _]| Vec2::new(*x, *y))
+                            .collect();
+                        let indices = mesh
+                            .indices()
+                            .unwrap()
+                            .iter()
+                            .fold(vec![], |mut acc, v| {
+                                match acc.last_mut().and_then(|last: &mut [u32; 4]| {
+                                    if last[0] < 3 {
+                                        Some(last)
+                                    } else {
+                                        None
+                                    }
+                                }) {
+                                    Some(last) => {
+                                        last[0] += 1;
+                                        last[last[0] as usize] = v as u32;
+                                    }
+                                    None => {
+                                        acc.push([1, v as u32, 0, 0]);
+                                    }
+                                }
+                                acc
+                            })
+                            .into_iter()
+                            .map(|[_, x, y, z]| [x, y, z])
+                            .collect();
 
-                    let gp1 = transform.transform_point(lp1.into());
-                    let gp2 = transform.transform_point(lp2.into());
+                        Some(commands.spawn((
+                            TransformBundle::default(),
+                            Collider::trimesh(vertices, indices),
+                        )))
+                    } else {
+                        None
+                    }
+                } else if let Ok((aabb, transform)) = aabbs.get(entity) {
+                    let p1 = transform.transform_point((aabb.center - aabb.half_extents).into());
+                    let p2 = transform.transform_point((aabb.center + aabb.half_extents).into());
 
-                    if gp1.min(gp2).z <= 0.0 && gp1.max(gp2).z >= 0.0 {
-                        let mut new_entity = commands.spawn((
+                    if p1.min(p2).z <= 0.0 && p1.max(p2).z >= 0.0 {
+                        Some(commands.spawn((
                             TransformBundle::from(Transform::from_translation(Vec3::from((
                                 aabb.center.xy(),
                                 0.0,
                             )))),
                             Collider::cuboid(aabb.half_extents.x, aabb.half_extents.y),
-                        ));
-                        new_entity.set_parent(entity);
-                        if props.sensor {
-                            new_entity.insert((Sensor, ActiveEvents::COLLISION_EVENTS));
-                        }
-                        if let Ok(name) = names.get(entity) {
-                            new_entity.insert(name.clone());
-                        }
+                        )))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(mut new_entity) = new_entity {
+                    new_entity.set_parent(entity);
+                    if props.sensor {
+                        new_entity.insert((Sensor, ActiveEvents::COLLISION_EVENTS));
+                    }
+                    if let Ok(name) = names.get(entity) {
+                        new_entity.insert(name.clone());
                     }
                 }
             }
@@ -206,6 +255,7 @@ fn load(
         scene.on_ready.take().unwrap()(
             &mut commands,
             GameSceneData {
+                root,
                 animations: gltf.named_animations.clone().into_iter().collect(),
             },
         );

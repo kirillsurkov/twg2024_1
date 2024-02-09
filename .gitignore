@@ -1,3 +1,6 @@
 /target
 /assets_dev
 /abyss-demo
+/bevy
+/bevy_rapier
+/bevy_toon_shader

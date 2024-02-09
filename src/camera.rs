@@ -21,22 +21,31 @@ impl Plugin for CameraPlugin {
 
 fn update(
     time: Res<Time>,
-    player: Query<&Transform, (With<PlayerPhysics>, Without<Camera3d>)>,
-    mut camera: Query<&mut Transform, With<Camera3d>>,
+    player: Res<Player>,
+    transform: Query<&Transform, (With<PlayerPhysics>, Without<Camera3d>)>,
+    mut cameras: Query<&mut Transform, With<Camera3d>>,
 ) -> Result<()> {
-    let mut camera = camera.get_single_mut()?;
-    let player = player.get_single()?;
+    let mut speed = 10.0 * time.delta_seconds();
 
-    let mut newpos = player.translation.clone();
-    newpos.x -= 1.0;
-    newpos.y += 2.0;
-    newpos.z += 8.0;
+    let transform = transform.get_single()?;
+    let lookat = transform.translation.clone();
+    let newpos = Vec3::from((
+        transform.translation.x - 1.0,
+        transform.translation.y + 2.0,
+        transform.translation.z + 8.0,
+    ));
 
-    let speed = 20.0 * time.delta_seconds();
-    let new_transform = Transform::from_translation(newpos).looking_at(player.translation, Vec3::Y);
+    let mut new_transform = Transform::from_translation(newpos).looking_at(lookat, Vec3::Y);
+    if player.is_space {
+        new_transform.translation.z -= 4.0;
+        new_transform.translation.y -= 1.0;
+        speed *= 0.5;
+    }
 
-    camera.translation = camera.translation.lerp(new_transform.translation, speed);
-    camera.rotation = new_transform.rotation;
+    for mut camera in cameras.iter_mut() {
+        camera.translation = camera.translation.lerp(new_transform.translation, speed);
+        camera.rotation = new_transform.rotation;
+    }
 
     Ok(())
 }

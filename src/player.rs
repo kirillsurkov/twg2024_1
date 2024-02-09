@@ -1,15 +1,16 @@
 use std::{
-    f32::consts::{FRAC_PI_8, PI},
+    f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     time::Duration,
 };
 
 use anyhow::Result;
-use bevy::prelude::*;
+use bevy::{prelude::*, render::view::RenderLayers};
 use bevy_rapier2d::prelude::*;
 
 use crate::{
     game_scene::{GameScene, GameSceneData, LoadGameScene},
     handle_errors,
+    utils::reduce_to_root,
 };
 
 #[derive(Resource)]
@@ -25,7 +26,9 @@ pub enum Direction {
 #[derive(Resource)]
 pub struct Player {
     scene_data: GameSceneData,
+    light: Option<Entity>,
     pub is_action: bool,
+    pub is_space: bool,
     is_up: bool,
     is_down: bool,
     is_left: bool,
@@ -36,13 +39,16 @@ pub struct Player {
     swim_timer: f32,
     push_timer: f32,
     turnaround_timer: f32,
+    light_timer: f32,
 }
 
 impl GameScene for Player {
     fn from_scene_data(data: GameSceneData) -> Self {
         Self {
             scene_data: data,
+            light: None,
             is_action: false,
+            is_space: false,
             is_up: false,
             is_down: false,
             is_left: false,
@@ -53,6 +59,7 @@ impl GameScene for Player {
             swim_timer: 0.0,
             push_timer: 0.0,
             turnaround_timer: 0.0,
+            light_timer: 0.0,
         }
     }
 }
@@ -76,13 +83,17 @@ impl Plugin for PlayerPlugin {
             Update,
             (
                 player_load.run_if(resource_exists::<LoadPlayer>()),
+                player_ready.run_if(resource_added::<Player>()),
                 (
-                    process_keyboard.pipe(handle_errors),
-                    process_movement.pipe(handle_errors),
+                    process_keyboard,
+                    process_movement,
+                    process_light,
                     process_animations,
-                    process_collisions.pipe(handle_errors),
+                    process_collisions,
                 )
-                    .run_if(resource_exists::<Player>()),
+                    .run_if(resource_exists::<Player>())
+                    .run_if(not(resource_added::<Player>()))
+                    .after(player_ready),
             ),
         );
     }
@@ -105,14 +116,53 @@ fn player_load(mut commands: Commands) {
         });
 }
 
-fn process_keyboard(keyboard_input: Res<Input<KeyCode>>, mut player: ResMut<Player>) -> Result<()> {
+fn player_ready(
+    mut commands: Commands,
+    mut player: ResMut<Player>,
+    entities: Query<(Entity, &Name)>,
+    children: Query<&Parent>,
+) {
+    let root = player.scene_data.root;
+    for (entity, name) in entities.iter() {
+        if !reduce_to_root(&children, entity, false, |f, r| f || (r == root)) {
+            continue;
+        }
+        match name.as_str() {
+            "spine.006" => {
+                commands.entity(entity).with_children(|p| {
+                    let light = p.spawn((
+                        SpotLightBundle {
+                            transform: Transform::from_rotation(Quat::from_rotation_y(PI))
+                                .with_translation(Vec3::new(1.0, 0.0, 0.0)),
+                            spot_light: SpotLight {
+                                intensity: 200000.0,
+                                color: Color::WHITE,
+                                shadows_enabled: true,
+                                range: 1000.0,
+                                outer_angle: 0.5 * FRAC_PI_8,
+                                radius: 0.25,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        RenderLayers::from_layers(&[0, 1]),
+                    ));
+                    player.light = Some(light.id());
+                });
+            }
+            _ => {}
+        }
+        println!("{name:?}");
+    }
+}
+
+fn process_keyboard(keyboard_input: Res<Input<KeyCode>>, mut player: ResMut<Player>) {
     player.is_action = keyboard_input.pressed(KeyCode::E);
+    player.is_space = keyboard_input.pressed(KeyCode::Space);
     player.is_up = keyboard_input.pressed(KeyCode::W);
     player.is_left = keyboard_input.pressed(KeyCode::A);
     player.is_down = keyboard_input.pressed(KeyCode::S);
     player.is_right = keyboard_input.pressed(KeyCode::D);
-
-    Ok(())
 }
 
 fn process_movement(
@@ -123,7 +173,7 @@ fn process_movement(
         (With<PlayerPhysics>, Without<PlayerModel>),
     >,
     mut player_model: Query<&mut Transform, (With<PlayerModel>, Without<PlayerPhysics>)>,
-) -> Result<()> {
+) {
     let lin_speed = 10.0;
     let ang_speed = 12.0;
 
@@ -131,7 +181,7 @@ fn process_movement(
     let push_tmax = 0.1;
     let ang_tmax = 0.2;
 
-    let (mut impulse, velocity, transform) = player_physics.get_single_mut()?;
+    let (mut impulse, velocity, transform) = player_physics.single_mut();
 
     player.move_vec = Vec2 {
         x: (player.is_right as i32 - player.is_left as i32) as f32,
@@ -179,9 +229,13 @@ fn process_movement(
         player.turnaround_timer = 0.0;
     }
 
-    let rotation_directon = match direction {
-        Direction::Left => PI,
-        Direction::Right => 0.0,
+    let rotation_directon = if player.is_space {
+        FRAC_PI_2
+    } else {
+        match direction {
+            Direction::Left => PI,
+            Direction::Right => 0.0,
+        }
     };
 
     let swaying_speed = if is_moving { 8.0 } else { 2.3 };
@@ -190,7 +244,7 @@ fn process_movement(
     let swaying_speed = if is_moving { 0.0 } else { 1.7 };
     let translation_swaying = 0.1 * (swaying_speed * time.elapsed_seconds()).sin();
 
-    let mut player_model = player_model.get_single_mut()?;
+    let mut player_model = player_model.single_mut();
     player_model.rotation = player_model.rotation.slerp(
         Quat::from_axis_angle(Vec3::Y, rotation_directon + rotation_swaying),
         10.0 * time.delta_seconds(),
@@ -199,8 +253,20 @@ fn process_movement(
         Vec3::from((0.0, translation_swaying, 0.0)),
         time.delta_seconds(),
     );
+}
 
-    Ok(())
+fn process_light(time: Res<Time>, mut player: ResMut<Player>, mut v: Query<&mut Visibility>) {
+    player.light_timer = if player.is_space {
+        (player.light_timer + time.delta_seconds()).min(0.1)
+    } else {
+        (player.light_timer - time.delta_seconds()).max(0.0)
+    };
+    let mut v = v.get_mut(player.light.unwrap()).unwrap();
+    *v = if player.light_timer > 0.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
 }
 
 fn process_animations(player: Res<Player>, mut anim_player: Query<(&Name, &mut AnimationPlayer)>) {
@@ -229,8 +295,8 @@ pub fn process_collisions(
     collisions: Query<(Entity, &PlayerCollision)>,
     mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
-) -> Result<()> {
-    let player = player.get_single()?;
+) {
+    let player = player.single();
 
     for e in collision_events.read() {
         let (other, started) = match e {
@@ -269,6 +335,4 @@ pub fn process_collisions(
             }
         }
     }
-
-    Ok(())
 }

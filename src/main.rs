@@ -1,13 +1,16 @@
 use anyhow::Result;
-use bevy::prelude::*;
+use bevy::{pbr::ExtendedMaterial, prelude::*};
 use bevy_hanabi::HanabiPlugin;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy_inspector_egui::{quick::WorldInspectorPlugin, DefaultInspectorConfigPlugin};
 use bevy_rapier2d::prelude::*;
+use camcone_material::CamConeMaterial;
 use camera::CameraPlugin;
 use game_scene::GameScenePlugin;
 use level::LevelPlugin;
+use lvl0::Level0;
 use lvl1::Level1;
 use mips::{generate_mipmaps, MipmapGeneratorPlugin};
+use paint_material::PaintMaterial;
 use player::PlayerPlugin;
 
 mod mips;
@@ -16,21 +19,19 @@ mod camera;
 mod game_scene;
 mod level;
 mod player;
+mod utils;
 
+mod camcone_material;
+mod paint_material;
+
+mod level_generator;
+
+mod lvl0;
 mod lvl1;
-
-trait Lerp {
-    fn lerp(&self, other: Self, scalar: f32) -> Self;
-}
-
-impl Lerp for f32 {
-    fn lerp(&self, other: Self, scalar: f32) -> Self {
-        self + (other - self) * scalar
-    }
-}
 
 #[derive(Default, Debug, Clone, Hash, PartialEq, Eq, States)]
 enum GameState {
+    Level0,
     #[default]
     Level1,
 }
@@ -51,21 +52,24 @@ fn main() {
             color: Color::WHITE,
             brightness: 0.0,
         })
-        .insert_resource(ClearColor(Color::BLACK))
         .add_plugins((
             DefaultPlugins,
             MipmapGeneratorPlugin,
-            HanabiPlugin,
+            //HanabiPlugin,
             RapierPhysicsPlugin::<NoUserData>::default(),
-            RapierDebugRenderPlugin::default(),
-            WorldInspectorPlugin::new(),
+            //RapierDebugRenderPlugin::default(),
+            //WorldInspectorPlugin::new(),
         ))
         .add_systems(Update, generate_mipmaps::<StandardMaterial>)
         .add_plugins((
+            MaterialPlugin::<ExtendedMaterial<StandardMaterial, PaintMaterial>>::default(),
+            MaterialPlugin::<ExtendedMaterial<StandardMaterial, CamConeMaterial>>::default(),
             GameScenePlugin,
             CameraPlugin,
             PlayerPlugin,
-            LevelPlugin::default().with_level::<Level1>(GameState::Level1),
+            LevelPlugin::default()
+                .with_level::<Level0>(GameState::Level0)
+                .with_level::<Level1>(GameState::Level1),
         ))
         .add_state::<GameState>()
         .run();

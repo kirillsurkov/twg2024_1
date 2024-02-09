@@ -1,27 +1,33 @@
 use anyhow::{Context, Result};
-use bevy::prelude::*;
+use bevy::{
+    pbr::{ExtendedMaterial, OpaqueRendererMethod},
+    prelude::*,
+    render::view::RenderLayers,
+};
 
 use crate::{
+    camcone_material::CamConeMaterial,
     game_scene::{GameScene, GameSceneData},
     handle_errors,
     level::{GameLevel, LoadLevel},
     player::{Direction, Player, PlayerCollision},
+    utils::reduce_to_root,
     GameState,
 };
 
 #[derive(Resource)]
 pub struct Level1 {
     scene_data: GameSceneData,
-    lever1_clicked: bool,
-    pusher1_active: bool,
+    cam1: Option<Handle<ExtendedMaterial<StandardMaterial, CamConeMaterial>>>,
+    cam1_timer: f32,
 }
 
 impl GameScene for Level1 {
     fn from_scene_data(data: GameSceneData) -> Self {
         Self {
             scene_data: data,
-            lever1_clicked: false,
-            pusher1_active: true,
+            cam1: None,
+            cam1_timer: 0.0,
         }
     }
 }
@@ -33,97 +39,97 @@ impl GameLevel for Level1 {
         app.add_systems(
             Update,
             (
-                process_sensors
-                    .pipe(handle_errors)
-                    .run_if(resource_exists::<Level1>())
-                    .run_if(resource_exists::<Player>()),
-                process_animations
-                    .pipe(handle_errors)
-                    .run_if(resource_exists::<Level1>()),
-            )
-                .run_if(in_state(state.clone())),
+                ready.run_if(resource_added::<Level1>()),
+                (
+                    process_sensors
+                        .run_if(resource_exists::<Level1>())
+                        .run_if(resource_exists::<Player>()),
+                    process_animations
+                        .pipe(handle_errors)
+                        .run_if(resource_exists::<Level1>()),
+                )
+                    .run_if(in_state(state.clone()))
+                    .after(ready),
+            ),
         );
     }
 }
 
 fn setup(mut commands: Commands) {
-    commands.insert_resource(LoadLevel::new::<Level1>("lvl1.glb", 0));
+    commands.insert_resource(LoadLevel::new::<Level1>("lvl1.glb", 1));
 }
 
 fn cleanup(mut commands: Commands) {
     commands.remove_resource::<Level1>();
 }
 
-fn process_sensors(
-    names: Query<&Name>,
-    collisions: Query<&PlayerCollision>,
+fn ready(
+    mut commands: Commands,
     mut level: ResMut<Level1>,
-    mut player: ResMut<Player>,
-) -> Result<()> {
-    player.push_vec = Vec2::ZERO;
+    mut camcone_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, CamConeMaterial>>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    entities: Query<(Entity, &Name, &Handle<StandardMaterial>)>,
+    children: Query<&Parent>,
+) {
+    let root = level.scene_data.root;
+    for (entity, name, mat) in entities.iter() {
+        if !reduce_to_root(&children, entity, false, |f, r| f || (r == root)) {
+            continue;
+        }
+        match name.as_str() {
+            "camera.1.cone" => {
+                let mut base = materials.get(mat).unwrap().clone();
+                base.alpha_mode = AlphaMode::Blend;
+                base.double_sided = false;
+                base.unlit = true;
+                let h = camcone_materials.add(ExtendedMaterial {
+                    base,
+                    extension: CamConeMaterial::default(),
+                });
+                level.cam1 = Some(h.clone_weak());
+                commands.entity(entity).insert(h);
+                commands.entity(entity).remove::<Handle<StandardMaterial>>();
 
-    for collision in collisions.iter() {
-        match names.get(collision.other).map(|n| n.as_str()) {
-            Ok("pusher1") => {
-                if level.pusher1_active {
-                    player.push_vec.y += 15.0
-                }
-            }
-            Ok("lever1_sensor") => {
-                if player.direction == Direction::Left && player.is_action {
-                    level.pusher1_active = false;
-                }
             }
             _ => {}
         }
     }
+}
 
-    Ok(())
+fn process_sensors(
+    mut level: ResMut<Level1>,
+    mut player: ResMut<Player>,
+    mut camcone_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, CamConeMaterial>>>,
+    time: Res<Time>,
+    names: Query<&Name>,
+    collisions: Query<&PlayerCollision>,
+) {
+    let mut cam1 = false;
+
+    for c in collisions.iter() {
+        match names.get(c.other).map(Name::as_str) {
+            Ok("camera.1.sensor") => cam1 = true,
+            _ => {}
+        }
+    }
+
+    if cam1 {
+        level.cam1_timer += time.delta_seconds() * 0.2;
+    } else {
+        level.cam1_timer -= time.delta_seconds() * 1.0;
+    }
+    level.cam1_timer = level.cam1_timer.max(0.0).min(1.0);
+
+    camcone_materials
+        .get_mut(level.cam1.as_ref().unwrap())
+        .unwrap()
+        .extension
+        .amount = level.cam1_timer;
 }
 
 fn process_animations(
     mut level: ResMut<Level1>,
     mut anim_player: Query<(&Name, &mut AnimationPlayer)>,
 ) -> Result<()> {
-    let clip = |scene_data: &GameSceneData, name| {
-        scene_data
-            .animations
-            .get(name)
-            .map(|c| c.clone_weak())
-            .context(format!("No animation with name '{name}'"))
-    };
-
-    for (name, mut player) in anim_player.iter_mut() {
-        match name.as_str() {
-            "fan1" => {
-                if level.pusher1_active {
-                    let clip = clip(&level.scene_data, "floor_fan")?;
-                    if !player.is_playing_clip(&clip) {
-                        println!("SPINNING {clip:?}");
-                        player.play(clip).repeat().set_speed(2.0);
-                    }
-                } else {
-                    player.pause()
-                }
-            }
-            "lever1" => {
-                if !level.pusher1_active && !level.lever1_clicked {
-                    level.lever1_clicked = true;
-                    let clip = clip(&level.scene_data, "lever_pull")?;
-                    if !player.is_playing_clip(&clip) {
-                        player.play(clip);
-                    }
-                }
-            }
-            "submarine_lights" => {
-                let clip = clip(&level.scene_data, "submarine_lights")?;
-                if !player.is_playing_clip(&clip) {
-                    player.play(clip).repeat();
-                }
-            }
-            _ => {}
-        }
-    }
-
     Ok(())
 }
