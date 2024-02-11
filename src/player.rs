@@ -3,13 +3,12 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
 use bevy::{prelude::*, render::view::RenderLayers};
 use bevy_rapier2d::prelude::*;
 
 use crate::{
+    components::loading::Loading,
     game_scene::{GameScene, GameSceneData, LoadGameScene},
-    handle_errors,
     utils::reduce_to_root,
 };
 
@@ -23,16 +22,27 @@ pub enum Direction {
     Left,
 }
 
+pub struct ViewController {
+    pub name: String,
+    pub from: Vec3,
+    pub to: Vec3,
+    pub hide_player: bool,
+}
+
 #[derive(Resource)]
 pub struct Player {
     scene_data: GameSceneData,
+    pub view_controller: Option<ViewController>,
     light: Option<Entity>,
+    pub oxygen: Option<Entity>,
+    pub socket: Option<Entity>,
     pub is_action: bool,
     pub is_space: bool,
     is_up: bool,
     is_down: bool,
     is_left: bool,
     is_right: bool,
+    pub is_mouse: bool,
     pub direction: Direction,
     pub move_vec: Vec2,
     pub push_vec: Vec2,
@@ -46,13 +56,17 @@ impl GameScene for Player {
     fn from_scene_data(data: GameSceneData) -> Self {
         Self {
             scene_data: data,
+            view_controller: None,
             light: None,
+            oxygen: None,
+            socket: None,
             is_action: false,
             is_space: false,
             is_up: false,
             is_down: false,
             is_left: false,
             is_right: false,
+            is_mouse: false,
             direction: Direction::default(),
             move_vec: Vec2::ZERO,
             push_vec: Vec2::ZERO,
@@ -87,12 +101,14 @@ impl Plugin for PlayerPlugin {
                 (
                     process_keyboard,
                     process_movement,
+                    process_view_controller,
                     process_light,
                     process_animations,
                     process_collisions,
                 )
                     .run_if(resource_exists::<Player>())
                     .run_if(not(resource_added::<Player>()))
+                    .run_if(not(any_with_component::<Loading>()))
                     .after(player_ready),
             ),
         );
@@ -150,19 +166,25 @@ fn player_ready(
                     player.light = Some(light.id());
                 });
             }
+            "spine.007" => player.oxygen = Some(entity),
             _ => {}
         }
         println!("{name:?}");
     }
 }
 
-fn process_keyboard(keyboard_input: Res<Input<KeyCode>>, mut player: ResMut<Player>) {
+fn process_keyboard(
+    keyboard_input: Res<Input<KeyCode>>,
+    mouse_input: Res<Input<MouseButton>>,
+    mut player: ResMut<Player>,
+) {
     player.is_action = keyboard_input.pressed(KeyCode::E);
     player.is_space = keyboard_input.pressed(KeyCode::Space);
     player.is_up = keyboard_input.pressed(KeyCode::W);
     player.is_left = keyboard_input.pressed(KeyCode::A);
     player.is_down = keyboard_input.pressed(KeyCode::S);
     player.is_right = keyboard_input.pressed(KeyCode::D);
+    player.is_mouse = mouse_input.pressed(MouseButton::Left);
 }
 
 fn process_movement(
@@ -253,6 +275,24 @@ fn process_movement(
         Vec3::from((0.0, translation_swaying, 0.0)),
         time.delta_seconds(),
     );
+}
+
+fn process_view_controller(
+    mut visibility: Query<&mut Visibility, With<PlayerModel>>,
+    player: Res<Player>,
+) {
+    let Ok(mut visibility) = visibility.get_single_mut() else {
+        return;
+    };
+    if let Some(ref view) = player.view_controller {
+        if view.hide_player {
+            *visibility = Visibility::Hidden;
+        } else {
+            *visibility = Visibility::Inherited;
+        }
+    } else {
+        *visibility = Visibility::Inherited;
+    }
 }
 
 fn process_light(time: Res<Time>, mut player: ResMut<Player>, mut v: Query<&mut Visibility>) {

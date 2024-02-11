@@ -1129,6 +1129,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_mod_raycast"
+version = "0.16.0"
+dependencies = [
+ "bevy_app 0.12.1",
+ "bevy_asset 0.12.1",
+ "bevy_derive 0.12.1",
+ "bevy_ecs 0.12.1",
+ "bevy_gizmos 0.12.1",
+ "bevy_math 0.12.1",
+ "bevy_reflect 0.12.1",
+ "bevy_render 0.12.1",
+ "bevy_sprite 0.12.1",
+ "bevy_transform 0.12.1",
+ "bevy_utils 0.12.1",
+ "bevy_window 0.12.1",
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.12.1"
 dependencies = [
@@ -4519,6 +4538,7 @@ dependencies = [
  "bevy 0.12.1",
  "bevy-inspector-egui",
  "bevy_hanabi",
+ "bevy_mod_raycast",
  "bevy_rapier2d",
  "futures-lite 2.2.0",
  "image",

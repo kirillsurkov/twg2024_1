@@ -42,9 +42,13 @@ fn update(
         speed *= 0.5;
     }
 
+    if let Some(ref view) = player.view_controller {
+        new_transform = Transform::from_translation(view.from).looking_at(view.to, Vec3::Y);
+    }
+
     for mut camera in cameras.iter_mut() {
         camera.translation = camera.translation.lerp(new_transform.translation, speed);
-        camera.rotation = new_transform.rotation;
+        camera.rotation = camera.rotation.slerp(new_transform.rotation, speed);
     }
 
     Ok(())

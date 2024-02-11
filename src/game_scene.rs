@@ -4,10 +4,7 @@ use bevy::{
     gltf::{Gltf, GltfExtras},
     pbr::{NotShadowCaster, NotShadowReceiver, TransmittedShadowReceiver},
     prelude::*,
-    render::{
-        mesh::{Indices, VertexAttributeValues},
-        primitives::Aabb,
-    },
+    render::{mesh::VertexAttributeValues, primitives::Aabb},
 };
 use bevy_rapier2d::geometry::{ActiveEvents, Collider, Sensor};
 use serde::Deserialize;
@@ -27,7 +24,7 @@ pub struct GameScenePlugin;
 
 impl Plugin for GameScenePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, load);
+        app.add_systems(Update, load.run_if(any_with_component::<LoadGameScene>()));
     }
 }
 
@@ -83,8 +80,8 @@ fn load(
     entities: Query<Entity>,
     children: Query<&Parent>,
     extras: Query<&GltfExtras>,
-    material: Query<&Handle<StandardMaterial>>,
-    mesh: Query<(&Handle<Mesh>, &GlobalTransform)>,
+    material_hs: Query<&Handle<StandardMaterial>>,
+    mesh_hs: Query<&Handle<Mesh>>,
     aabbs: Query<(&Aabb, &GlobalTransform)>,
     names: Query<&Name>,
 ) {
@@ -108,6 +105,7 @@ fn load(
         };
 
         let Some(root) = scene.root else {
+            println!("INSERT NAME {}", scene.name);
             commands.entity(root).insert((
                 Name::new(scene.name.clone()),
                 CustomProps::default(),
@@ -158,9 +156,9 @@ fn load(
                 light.radius = 0.25;
             }
 
-            if let Ok(material) = material.get(entity) {
+            if let Ok(material) = material_hs.get(entity) {
                 let material = materials.get_mut(material).unwrap();
-                material.emissive *= 2.0;
+                material.emissive *= 20.0;
             }
 
             if props.invisible || props.sensor {
@@ -179,8 +177,7 @@ fn load(
 
             if !props.ignore_physics {
                 let new_entity = if props.complex_physics {
-                    println!("COMPLEX PHYSICS");
-                    if let Ok((mesh, transform)) = mesh.get(entity) {
+                    if let Ok(mesh) = mesh_hs.get(entity) {
                         let mesh = meshes.get(mesh).unwrap();
                         let vertices = mesh
                             .attribute(Mesh::ATTRIBUTE_POSITION)

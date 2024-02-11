@@ -2,38 +2,36 @@ use anyhow::Result;
 use bevy::{pbr::ExtendedMaterial, prelude::*};
 use bevy_hanabi::HanabiPlugin;
 use bevy_inspector_egui::{quick::WorldInspectorPlugin, DefaultInspectorConfigPlugin};
+use bevy_mod_raycast::DefaultRaycastingPlugin;
 use bevy_rapier2d::prelude::*;
-use camcone_material::CamConeMaterial;
 use camera::CameraPlugin;
+use components::{
+    code::CodePlugin, fan::FanPlugin, gate::GatePlugin, security_camera::SecurityCameraPlugin, socket::SocketPlugin, switch::SwitchPlugin
+};
 use game_scene::GameScenePlugin;
-use level::LevelPlugin;
-use lvl0::Level0;
-use lvl1::Level1;
+use levels::{lvl0::Level0, lvl1::Level1, lvl2::Level2, LevelPlugin};
+use materials::{beam_material::BeamMaterial, paint_material::PaintMaterial};
 use mips::{generate_mipmaps, MipmapGeneratorPlugin};
-use paint_material::PaintMaterial;
 use player::PlayerPlugin;
 
 mod mips;
 
 mod camera;
+mod components;
 mod game_scene;
-mod level;
+mod levels;
+mod materials;
 mod player;
 mod utils;
 
-mod camcone_material;
-mod paint_material;
-
 mod level_generator;
-
-mod lvl0;
-mod lvl1;
 
 #[derive(Default, Debug, Clone, Hash, PartialEq, Eq, States)]
 enum GameState {
     Level0,
-    #[default]
     Level1,
+    #[default]
+    Level2,
 }
 
 pub(crate) fn handle_errors(In(result): In<Result<()>>) {
@@ -53,23 +51,31 @@ fn main() {
             brightness: 0.0,
         })
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(bevy_mod_raycast::low_latency_window_plugin()),
+            DefaultRaycastingPlugin,
             MipmapGeneratorPlugin,
             //HanabiPlugin,
             RapierPhysicsPlugin::<NoUserData>::default(),
-            //RapierDebugRenderPlugin::default(),
-            //WorldInspectorPlugin::new(),
+            RapierDebugRenderPlugin::default(),
+            WorldInspectorPlugin::new(),
         ))
         .add_systems(Update, generate_mipmaps::<StandardMaterial>)
         .add_plugins((
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, PaintMaterial>>::default(),
-            MaterialPlugin::<ExtendedMaterial<StandardMaterial, CamConeMaterial>>::default(),
+            MaterialPlugin::<ExtendedMaterial<StandardMaterial, BeamMaterial>>::default(),
+            SecurityCameraPlugin,
+            SwitchPlugin,
+            GatePlugin,
+            CodePlugin,
+            SocketPlugin,
+            FanPlugin,
             GameScenePlugin,
             CameraPlugin,
             PlayerPlugin,
             LevelPlugin::default()
                 .with_level::<Level0>(GameState::Level0)
-                .with_level::<Level1>(GameState::Level1),
+                .with_level::<Level1>(GameState::Level1)
+                .with_level::<Level2>(GameState::Level2),
         ))
         .add_state::<GameState>()
         .run();
