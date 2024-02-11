@@ -48,6 +48,13 @@ impl Socket {
             camera: None,
         }
     }
+
+    pub fn connected(&self) -> bool {
+        match self.state {
+            State::ConnectedFrom | State::ConnectedTo(_) => true,
+            _ => false,
+        }
+    }
 }
 
 pub struct SocketPlugin;
@@ -150,6 +157,11 @@ fn update(
             }
             _ => {}
         }
+
+        if let Some(camera) = socket.camera {
+            socket.camera = None;
+            cams.get_mut(camera).unwrap().wire = false;
+        }
     }
 
     let Some(carrying) = carrying else {
@@ -219,9 +231,6 @@ fn update(
             });
             socket.camera = Some(camera);
             cams.get_mut(camera).unwrap().wire = true;
-        } else if let Some(camera) = socket.camera {
-            socket.camera = None;
-            cams.get_mut(camera).unwrap().wire = false;
         }
     }
 

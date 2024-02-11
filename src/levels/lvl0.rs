@@ -132,7 +132,6 @@ fn process_animations(
                 if level.pusher1_active {
                     let clip = clip(&level.scene_data, "floor_fan")?;
                     if !player.is_playing_clip(&clip) {
-                        println!("SPINNING {clip:?}");
                         player.play(clip).repeat().set_speed(2.0);
                     }
                 } else {

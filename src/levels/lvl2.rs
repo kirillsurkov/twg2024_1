@@ -10,14 +10,13 @@ use crate::{
     handle_errors,
     player::Player,
     utils::reduce_to_root,
-    GameState,
+    GameState, Restart,
 };
 
 use super::{GameLevel, LoadLevel};
 
 struct Entities {
-    socket1: Entity,
-    socket2: Entity,
+    socket_end: Entity,
     cam1: Entity,
     switch1: Entity,
     code1: Entity,
@@ -72,8 +71,7 @@ fn ready(
     entities: Query<(Entity, &Name)>,
     children: Query<&Parent>,
 ) {
-    let mut socket1 = None;
-    let mut socket2 = None;
+    let mut socket_end = None;
     let mut cam1 = None;
     let mut switch1 = None;
     let mut code1 = None;
@@ -88,21 +86,24 @@ fn ready(
         }
         let mut entity = commands.entity(entity);
         match name.as_str() {
-            "socket_start.002" => socket1 = Some(entity.insert((Loading, Socket::new(true))).id()),
-            "socket_end.002" => socket2 = Some(entity.insert((Loading, Socket::new(false))).id()),
+            "socket_start.002" => {
+                entity.insert((Loading, Socket::new(true)));
+            }
+            "socket_end.002" => {
+                socket_end = Some(entity.insert((Loading, Socket::new(false))).id())
+            }
             "camera.002" => cam1 = Some(entity.insert((Loading, SecurityCamera::new())).id()),
             "switch.003" => {
                 switch1 = Some(entity.insert((Loading, Switch::new(anims))).id());
             }
-            "code.002" => code1 = Some(entity.insert((Loading, Code::new(1234))).id()),
+            "code.002" => code1 = Some(entity.insert((Loading, Code::new(1824))).id()),
             "fan.002" => fan1 = Some(entity.insert((Loading, Fan::new())).id()),
             _ => {}
         };
     }
 
     level.entities = Some(Entities {
-        socket1: socket1.unwrap(),
-        socket2: socket2.unwrap(),
+        socket_end: socket_end.unwrap(),
         cam1: cam1.unwrap(),
         switch1: switch1.unwrap(),
         code1: code1.unwrap(),
@@ -111,6 +112,8 @@ fn ready(
 }
 
 fn process_sensors(
+    mut commands: Commands,
+    mut game_state: ResMut<NextState<GameState>>,
     level: Res<Level2>,
     sockets: Query<&Socket>,
     mut sec_cams: Query<&mut SecurityCamera>,
@@ -122,8 +125,7 @@ fn process_sensors(
         return;
     };
 
-    let socket1 = sockets.get(entities.socket1).unwrap();
-    let socket2 = sockets.get(entities.socket2).unwrap();
+    let socket_end = sockets.get(entities.socket_end).unwrap();
     let mut cam1 = sec_cams.get_mut(entities.cam1).unwrap();
     let switch1 = switches.get(entities.switch1).unwrap();
     let code1 = codes.get(entities.code1).unwrap();
@@ -135,6 +137,15 @@ fn process_sensors(
 
     if switch1.activated() {
         cam1.active = false;
+    }
+
+    if cam1.triggered {
+        commands.insert_resource(Restart(GameState::Level2));
+        game_state.set(GameState::Restart);
+    }
+
+    if socket_end.connected() {
+        game_state.set(GameState::Level3);
     }
 }
 

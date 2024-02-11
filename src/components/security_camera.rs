@@ -23,7 +23,7 @@ struct CamSensor {
 #[derive(Component)]
 pub struct SecurityCamera {
     pub active: bool,
-    triggered: bool,
+    pub triggered: bool,
     pub wire: bool,
 }
 

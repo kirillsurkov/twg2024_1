@@ -19,7 +19,7 @@ enum State {
     Idle,
     Acting,
     InputFinished,
-    Success,
+    Success(bool),
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +65,10 @@ impl Code {
     }
 
     pub fn activated(&self) -> bool {
-        self.state == State::Success
+        match self.state {
+            State::Success(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -116,7 +119,6 @@ fn init(
                     segments[digit as usize][segment as usize] = Some(current);
                     *visibility.get_mut(current).unwrap() = Visibility::Hidden;
                 } else if name.contains("btn_") {
-                    println!("{name}");
                     let from = name.find("btn_").unwrap() + 4;
                     let number = name.as_bytes()[from] - 0x30;
                     buttons[number as usize] = Some((current, number));
@@ -252,7 +254,7 @@ fn update(
                     .unwrap();
                 if secret == code.secret {
                     if code.finish_timer >= 1.0 {
-                        code.state = State::Success;
+                        code.state = State::Success(false);
                     }
                     material.base_color = Color::rgb_linear(0.0, 1.0, 0.0);
                     material.emissive = Color::rgb_linear(0.5, 10.0, 0.5);
@@ -265,9 +267,11 @@ fn update(
                     material.emissive = Color::rgb_linear(10.0, 0.5, 0.5);
                 }
             }
-            State::Success => {
+            State::Success(false) => {
                 player.view_controller = None;
+                code.state = State::Success(true);
             }
+            State::Success(true) => {}
         }
 
         for (i, segment) in entities.segments.iter().enumerate() {

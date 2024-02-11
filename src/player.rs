@@ -13,6 +13,9 @@ use crate::{
 };
 
 #[derive(Resource)]
+pub struct PlayerRoot(pub Entity);
+
+#[derive(Resource)]
 pub struct LoadPlayer;
 
 #[derive(Default, Clone, PartialEq, Debug)]
@@ -117,7 +120,8 @@ impl Plugin for PlayerPlugin {
 
 fn player_load(mut commands: Commands) {
     commands.remove_resource::<LoadPlayer>();
-    commands
+
+    let physics = commands
         .spawn((
             PlayerPhysics,
             Name::new("player"),
@@ -127,9 +131,13 @@ fn player_load(mut commands: Commands) {
             Velocity::default(),
             Collider::capsule_y(0.5, 0.5),
         ))
-        .with_children(|parent| {
-            parent.spawn((PlayerModel, LoadGameScene::new::<Player>("diver.glb", 0)));
-        });
+        .id();
+    commands
+        .spawn((PlayerModel, LoadGameScene::new::<Player>("diver.glb", 0)))
+        .set_parent(physics);
+
+    commands.remove_resource::<PlayerRoot>();
+    commands.insert_resource(PlayerRoot(physics));
 }
 
 fn player_ready(
@@ -169,7 +177,6 @@ fn player_ready(
             "spine.007" => player.oxygen = Some(entity),
             _ => {}
         }
-        println!("{name:?}");
     }
 }
 
@@ -297,12 +304,12 @@ fn process_view_controller(
 
 fn process_light(time: Res<Time>, mut player: ResMut<Player>, mut v: Query<&mut Visibility>) {
     player.light_timer = if player.is_space {
-        (player.light_timer + time.delta_seconds()).min(0.1)
+        (player.light_timer + time.delta_seconds() * 5.0).min(1.0)
     } else {
-        (player.light_timer - time.delta_seconds()).max(0.0)
+        (player.light_timer - time.delta_seconds() * 20.0).max(0.0)
     };
     let mut v = v.get_mut(player.light.unwrap()).unwrap();
-    *v = if player.light_timer > 0.0 {
+    *v = if player.light_timer > 0.5 {
         Visibility::Inherited
     } else {
         Visibility::Hidden

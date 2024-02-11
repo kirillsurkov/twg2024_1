@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use bevy::{
     gltf::{Gltf, GltfExtras},
-    pbr::{NotShadowCaster, NotShadowReceiver, TransmittedShadowReceiver},
+    pbr::{ExtendedMaterial, NotShadowCaster, NotShadowReceiver, OpaqueRendererMethod, TransmittedShadowReceiver},
     prelude::*,
-    render::{mesh::VertexAttributeValues, primitives::Aabb},
+    render::{mesh::VertexAttributeValues, primitives::Aabb, view::RenderLayers},
 };
 use bevy_rapier2d::geometry::{ActiveEvents, Collider, Sensor};
 use serde::Deserialize;
 
-use crate::utils::reduce_to_root;
+use crate::{materials::paint_material::PaintMaterial, utils::reduce_to_root};
 
 pub struct GameSceneData {
     pub root: Entity,
@@ -67,6 +67,8 @@ struct CustomProps {
     color: Vec3,
     #[serde(default)]
     complex_physics: bool,
+    #[serde(default)]
+    text: bool,
 }
 
 fn load(
@@ -74,6 +76,7 @@ fn load(
     mut scenes: Query<(Entity, &mut LoadGameScene)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut lights: Query<&mut PointLight>,
+    mut text_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, PaintMaterial>>>,
     asset_server: Res<AssetServer>,
     gltfs: Res<Assets<Gltf>>,
     meshes: Res<Assets<Mesh>>,
@@ -105,7 +108,6 @@ fn load(
         };
 
         let Some(root) = scene.root else {
-            println!("INSERT NAME {}", scene.name);
             commands.entity(root).insert((
                 Name::new(scene.name.clone()),
                 CustomProps::default(),
@@ -147,6 +149,7 @@ fn load(
                     no_shadow: p.no_shadow || props.no_shadow,
                     color: props.color,
                     complex_physics: p.complex_physics || props.complex_physics,
+                    text: p.text || props.text,
                 }
             });
 
@@ -158,7 +161,18 @@ fn load(
 
             if let Ok(material) = material_hs.get(entity) {
                 let material = materials.get_mut(material).unwrap();
-                material.emissive *= 20.0;
+
+                if props.text {
+                    let mut base = material.clone();
+                    base.alpha_mode = AlphaMode::Blend;
+                    base.opaque_render_method = OpaqueRendererMethod::Forward;
+                    let h = text_materials.add(ExtendedMaterial {
+                        base,
+                        extension: PaintMaterial {},
+                    });
+                    commands.entity(entity).remove::<Handle<StandardMaterial>>();
+                    commands.entity(entity).insert((h, RenderLayers::layer(1)));
+                }
             }
 
             if props.invisible || props.sensor {
