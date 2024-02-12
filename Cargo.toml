@@ -5,11 +5,11 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.79"
-bevy = { path = "./bevy", features = ["jpeg"] }
-bevy-inspector-egui = { path = "./bevy-inspector-egui/crates/bevy-inspector-egui" }
+bevy = { version = "0.12.1", features = ["jpeg"] }
+bevy-inspector-egui = "0.22.1"
 bevy_hanabi = "0.9.0"
-bevy_mod_raycast = { path = "./bevy_mod_raycast" }
-bevy_rapier2d = { path = "./bevy_rapier/bevy_rapier2d" }
+bevy_mod_raycast = "0.16.0"
+bevy_rapier2d = "0.24.0"
 futures-lite = "2.2.0"
 image = "0.24.8"
 pixelate_mesh = "0.2.0"
